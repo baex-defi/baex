@@ -28,3 +28,10 @@ To achieve the stated goals, the following principles and mechanisms were taken 
 
 
 Learn more on https://baex.com/
+
+# Ethereum mainnet contracts:
+# BAEX token: 0x50089b34B86Dba296A69C27ffaa60123573F1f89
+# BAEX options: 0xF9A62fE8d93A35df1f424088f14Fd5B72054F1E8
+# BAEX referral program: 0x8182076c4eF090c374346133F682202890A130A7
+# BAEX bonus: 0x836E30EDc4E68358BecABd821558415eD197d588
+# BAEX balancer: 0x45372372128E07402B79f6e3FE90a046532e7870
