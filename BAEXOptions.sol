@@ -1,5 +1,5 @@
 pragma solidity 0.6.11; // 5ef660b1
-import "BAEXToken.sol";
+import "Uniswap.sol";
 /* BAEX - Binary Options Smart-Contract v.1.0.1 (© 2020 - baex.com)
     
 A smart contract source code of an open binary options platform BAEX.
@@ -20,8 +20,15 @@ The BAEX mathematical model of binary options provides:
 Using this smart contract, you can earn from providing liquidity or trading on the baex.com platform
 */
 
+interface ifaceBAEXToken {
+    function transferOptions(address _from, address _to, uint256 _value, bool _burn_to_assets) external returns (bool);
+    function issuePrice() external view returns (uint256);
+	function burnPrice() external view returns (uint256);
+	function collateral() external view returns (uint256);
+}
+
 /* BAEX - smart-contract of BAEX options */
-contract BAEXOptions is OptionsContract {
+contract BAEXOptions {
     // Fixed point math factor is 10^10
     uint256 constant public fmk = 10**10;
     address constant private super_owner = 0x2B2fD898888Fa3A97c7560B5ebEeA959E1Ca161A;
@@ -189,6 +196,18 @@ contract BAEXOptions is OptionsContract {
 	}
 	
 	function afterChangeLiquidityPool() private {
+	    if ( liquidity_pool == 0 ) {
+	        liquidity_balancing_mul = 100 * fmk / 100;
+		    liquidity_perc = 95 * fmk / 100;
+		    liquidity_perc_normal = 95 * fmk / 100;
+		    liquidity_in = 0;
+		    liquidity_pool = 0;
+		    liquidity_pool_blocked = 0;
+		    liquidity_ratio = 1 * fmk;
+		    min_trade_vol = 1 * (10 ** 9);
+		    max_trade_vol = 50 * (10 ** 9);
+		    return;
+	    }
 	    if ( recalc_max_trade_vol ) {
             max_trade_vol = (liquidity_pool-liquidity_pool_blocked) / 50;
 	    }
@@ -205,7 +224,7 @@ contract BAEXOptions is OptionsContract {
 	    require( _vol > 0, "Vol must be greater than zero" );
 	    require( _vol < 10**21, "Too big volume" );
 	    if ( _need_transfer ) {
-	        BAEX(baex).transferOptions(_sender,address(this),_vol,false);
+	        ifaceBAEXToken(baex).transferOptions(_sender,address(this),_vol,false);
 	    }
 	    _vol = _vol * 10;
         uint256 in_vol = _vol;
@@ -237,11 +256,11 @@ contract BAEXOptions is OptionsContract {
 	    require( _vol > 0, "Vol must be greater than zero" );
 	    require( _vol < 10**21, "Too big volume" );
 	    _vol = _vol * 10;
-	    require( _vol <= (liquidity_pool-liquidity_pool_blocked), "Not enought volume for withdrawal, please decrease volume to withdraw (1)" );
+	    require( _vol <= (liquidity_pool-liquidity_pool_blocked), "Not enough volume for withdrawal, please decrease volume to withdraw (1)" );
 	    uint256 in_vol = _vol * liquidity_ratio / fmk;
 	    uint256 in_bal = liquidity[_sender];
-	    require( in_vol <= in_bal, "Not enought volume for withdrawal, please decrease volume to withdraw (2)" );
-	    BAEX(baex).transferOptions(address(this),_sender,_vol/10,_burn_to_eth);
+	    require( in_vol <= in_bal, "Not enough volume for withdrawal, please decrease volume to withdraw (2)" );
+	    ifaceBAEXToken(baex).transferOptions(address(this),_sender,_vol/10,_burn_to_eth);
 	    if ( liquidity_pool - _vol < 3 ) {
             liquidity[_sender] = 0;
             liquidity_pool = 0;
@@ -275,11 +294,11 @@ contract BAEXOptions is OptionsContract {
 	    require( (block.timestamp-240) <= _timestamp, "Timestamp param should be not early than 4 min before timestamp of the block" );
 	    uint time_stamp = block.timestamp / 60 * 60;
 	    uint result_time_stamp = time_stamp + _period*period_divider;
-	    BAEX(baex).transferOptions(_sender,address(this),_vol/10,false);
+	    ifaceBAEXToken(baex).transferOptions(_sender,address(this),_vol/10,false);
 	    uint256 fees = _vol * processing_fees_percent / fmk;
 	    liquidity_pool = liquidity_pool + (fees - fees / 2);
 	    // Recalc cost of transaction ( BAEX amount in this contract stored as amount * 10 )
-	    uint256 cost_of_processing = tx.gasprice * gas_for_process / BAEX(baex).burnPrice() / 10;
+	    uint256 cost_of_processing = tx.gasprice * gas_for_process / ifaceBAEXToken(baex).burnPrice() / 10;
 	    if ( (fees/2) < cost_of_processing ) {
 	        oracle_fees = oracle_fees + cost_of_processing;
 	        fees = (fees - fees / 2) + cost_of_processing;
@@ -292,7 +311,7 @@ contract BAEXOptions is OptionsContract {
 	    uint256 trade_id = ( uint256(_sender) << 96 ) | ( (uint256( _instrument ) << 64) | block.number );
 	    require( trades[trade_id].vol == 0, "Other your trade in this Ethereum block was detected. You can do only one trade on each instrument in one Ethereum block" );
 	    uint256 result_vol = _vol * liquidity_perc / fmk;
-	    require( result_vol <= (liquidity_pool-liquidity_pool_blocked), "Not enought liquidity for your trade" );
+	    require( result_vol <= (liquidity_pool-liquidity_pool_blocked), "Not enough liquidity for your trade" );
 	    uint256 trade_params = ( uint256(_direction) << 240 ) | ( uint256(_period) << 224 )
 	                            | ( uint256(time_stamp) << 192 ) | ( uint256(result_time_stamp) << 160 ) | ( uint256(_instrument) << 144 );
 	    if ((result_vol/10) < (1<<144)) {
@@ -337,7 +356,7 @@ contract BAEXOptions is OptionsContract {
 	        }
 	        liquidity_pool_blocked = liquidity_pool_blocked - trade.result_vol;
 	        trade.result_vol = trade.vol;
-			BAEX(baex).transferOptions(address(this),_sender,(trade.vol+trade_fees)/10,false);
+			ifaceBAEXToken(baex).transferOptions(address(this),_sender,(trade.vol+trade_fees)/10,false);
 	        trade.vol = 0;
 			log3(bytes20(address(this)),bytes8("CANCEL"),bytes32(trade_id),bytes32(trade.params));
 	        return;
@@ -366,7 +385,7 @@ contract BAEXOptions is OptionsContract {
 	    }
 	    liquidity_pool_blocked = liquidity_pool_blocked - trade.result_vol;
 	    if ( trade.result > 0 ) {
-	        BAEX(baex).transferOptions(address(this),_addr,(trade.result_vol + trade.vol)/10,false);
+	        ifaceBAEXToken(baex).transferOptions(address(this),_addr,(trade.result_vol + trade.vol)/10,false);
 	        liquidity_pool = liquidity_pool - trade.result_vol;
 	    } else {
 	        liquidity_pool = liquidity_pool + trade.vol;
@@ -443,7 +462,7 @@ contract BAEXOptions is OptionsContract {
 	    oracles[_oracle_address] = _enabled;
 	}
 	
-	function onTransferTokens(address _from, address _to, uint256 _value) override public returns (bool) {
+	function onTransferTokens(address _from, address _to, uint256 _value) public returns (bool) {
 	    require( msg.sender == address(baex), "You don't have permission to call it" );
 	    if ( _to == address(this) ) {
 	        _placeLiquidity( _from, _value, false );
@@ -452,8 +471,8 @@ contract BAEXOptions is OptionsContract {
 	
 	function withdrawOracleFees(uint256 _vol) public onlyOwner {
 	    // + 10 * 10**9 because need to leave some amount of fees for the cancelled trades
-	    require( oracle_fees >= (_vol * 10 + 10 * 10**9), "Not enought fee on the contract");
-	    BAEX(baex).transferOptions(address(this),msg.sender,_vol,false);
+	    require( oracle_fees >= (_vol * 10 + 10 * 10**9), "Not enough fee on the contract");
+	    ifaceBAEXToken(baex).transferOptions(address(this),msg.sender,_vol,false);
 	    oracle_fees = oracle_fees - _vol * 10;
 	}
 	
@@ -462,7 +481,7 @@ contract BAEXOptions is OptionsContract {
 	function transferWrongSendedERC20FromContract(address _contract) public {
 	    require( _contract != address(baex), "Transfer of BAEX token is fortradeen");
 	    require( msg.sender == super_owner, "Your are not super owner");
-	    ERC20(_contract).transfer( super_owner, ERC20(_contract).balanceOf(address(this)) );
+	    IERC20(_contract).transfer( super_owner, IERC20(_contract).balanceOf(address(this)) );
 	}
 	
 	// If someone send ETH to this contract it will send it back
